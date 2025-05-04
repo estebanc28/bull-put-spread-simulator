@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Simulación Monte Carlo Bull Spread con Puts</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+<style>
+  body {
+    font-family: 'Segoe UI', sans-serif;
+    background-color: #f8f9fa;
+    margin: 30px;
+    color: #333;
+  }
+  h1 {
+    text-align: center;
+    color: #2c3e50;
+    margin-bottom: 30px;
+  }
+  form {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: 20px 30px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    max-width: 700px;
+    margin: auto;
+  }
+  label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: 500;
+  }
+  input {
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    margin-left: 10px;
+    width: 120px;
+  }
+  button {
+    display: block;
+    background-color: #007bff;
+    color: white;
+    padding: 10px 20px;
+    margin: 20px auto;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+  }
+  button:hover {
+    background-color: #0056b3;
+  }
+  canvas {
+    margin: 30px auto;
+    display: block;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+  }
+
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    label { display: inline-block; width: 200px; margin: 5px 0; }
+    input { width: 100px; }
+    canvas { margin: 20px 0; max-width: 100%; height: 300px; }
+  </style>
+</head>
+<body>
+
+  <h1>Simulación Monte Carlo Bull Spread con Puts</h1>
+  <form id="simForm">
+    <label>Monto a invertir: <input type="number" id="investment" value="10000"></label><br>
+    <label>Precio inicial acción (S₀): <input type="number" id="S0" value="115"></label><br>
+    <label>Valor inicial put comprado: <input type="number" id="P0_low" value="0"></label><br>
+    <label>Valor inicial put vendido: <input type="number" id="P0_high" value="0"></label><br>
+    <label>Tasa libre de riesgo (r): <input type="number" id="r" value="0.0428" step="0.0001"></label><br>
+    <label>Volatilidad (σ): <input type="number" id="sigma" value="0.5043" step="0.0001"></label><br>
+    <label>Vencimiento T (años): <input type="number" id="T" value="1" step="0.1"></label><br>
+    <label>Strike put comprado (Kₗₒw): <input type="number" id="K_low" value="110"></label><br>
+    <label>Strike put vendido (Kₕᵢgh): <input type="number" id="K_high" value="120"></label><br>
+    <label>Días hábiles (n_steps): <input type="number" id="n_steps" value="252"></label><br>
+    <label>Corridas (N): <input type="number" id="N" value="2000"></label><br>
+    <label>Trayectorias a mostrar: <input type="number" id="display" value="200"></label><br>
+    <button type="button" onclick="runSimulation()">Ejecutar simulación</button>
+  </form>
+
+  <canvas id="chartPrice"></canvas>
+  <canvas id="chartPutLow"></canvas>
+  <canvas id="chartPutHigh"></canvas>
+  <canvas id="chartSpread"></canvas>
+  <canvas id="chartHist"></canvas>
+  <canvas id="chartPayoff"></canvas>
+
+  <script>
+    function randn_bm() {
+      let u=0,v=0; while(u===0) u=Math.random(); while(v===0) v=Math.random();
+      return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    }
+    function erf(x) {
+      const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+      const sign=x<0?-1:1; x=Math.abs(x);
+      const t=1/(1+p*x);
+      const y=1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+      return sign*y;
+    }
+    function normCDF(x) { return 0.5*(1+erf(x/Math.sqrt(2))); }
+    function bsPutPrice(S,K,tau,r,sigma) {
+      if(tau<=0) return Math.max(K-S,0);
+      const d1=(Math.log(S/K)+(r+0.5*sigma*sigma)*tau)/(sigma*Math.sqrt(tau));
+      const d2=d1-sigma*Math.sqrt(tau);
+      return K*Math.exp(-r*tau)*normCDF(-d2)-S*normCDF(-d1);
+    }
+
+    let chartPrice,chartPutLow,chartPutHigh,chartSpread,chartHist,chartPayoff;
+    function runSimulation(){
+      const S0=parseFloat(document.getElementById('S0').value);
+      const r=parseFloat(document.getElementById('r').value);
+      const sigma=parseFloat(document.getElementById('sigma').value);
+      const T=parseFloat(document.getElementById('T').value);
+      const K_low=parseFloat(document.getElementById('K_low').value);
+      const K_high=parseFloat(document.getElementById('K_high').value);
+      const n_steps=parseInt(document.getElementById('n_steps').value);
+      const N=parseInt(document.getElementById('N').value);
+      const display=parseInt(document.getElementById('display').value);
+      const dt=T/n_steps;
+      // Simular GBM
+      const paths=Array.from({length:N},()=>Array(n_steps+1).fill(0));
+      for(let i=0;i<N;i++){ paths[i][0]=S0; }
+      for(let i=0;i<N;i++){
+        for(let j=0;j<n_steps;j++){
+          const z=randn_bm();
+          paths[i][j+1]=paths[i][j]*Math.exp((r-0.5*sigma*sigma)*dt+sigma*Math.sqrt(dt)*z);
+        }
+      }
+      // Indices a mostrar
+      const idxs=[]; while(idxs.length<display){ const k=Math.floor(Math.random()*N); if(!idxs.includes(k)) idxs.push(k);}      
+      // Datasets de líneas
+      const dsPrice=idxs.map(i=>({label:`S${i}`,data:paths[i].map((S,j)=>({x:j*dt,y:S})),borderWidth:1,fill:false,pointRadius:0}));
+      const dsLow=[],dsHigh=[],dsSpr=[];
+      idxs.forEach(i=>{
+        const a=[],b=[],c=[];
+        for(let j=0;j<=n_steps;j++){
+          const tau=T-j*dt;
+          const Pl=bsPutPrice(paths[i][j],K_low,tau,r,sigma);
+          const Ph=bsPutPrice(paths[i][j],K_high,tau,r,sigma);
+          a.push({x:j*dt,y:Pl}); b.push({x:j*dt,y:Ph}); c.push({x:j*dt,y:Pl-Ph});
+        }
+        dsLow.push({label:`Low${i}`,data:a,borderWidth:1,fill:false,pointRadius:0});
+        dsHigh.push({label:`High${i}`,data:b,borderWidth:1,fill:false,pointRadius:0});
+        dsSpr.push({label:`Spr${i}`,data:c,borderWidth:1,fill:false,pointRadius:0});
+      });
+
+      // Histograma
+      const final=paths.map(p=>Math.max(K_low-p[n_steps],0)-Math.max(K_high-p[n_steps],0));
+      const mean=final.reduce((a,b)=>a+b)/N;
+      const sorted=[...final].sort((a,b)=>a-b);
+      const median=sorted[Math.floor(N/2)];
+      const bins=50,minV=Math.min(...final),maxV=Math.max(...final),w=(maxV-minV)/bins;
+      const cnt=Array(bins).fill(0); final.forEach(v=>cnt[Math.min(bins-1,Math.floor((v-minV)/w))]++);
+      const mode=minV+w*(cnt.indexOf(Math.max(...cnt))+0.5);
+      const std=Math.sqrt(final.map(v=>Math.pow(v-mean,2)).reduce((a,b)=>a+b)/N);
+      const pLoss=final.filter(v=>v<0).length/N;
+      const p15=final.filter(v=>v<=-1.5).length/N;
+      const p30=final.filter(v=>v<=-3).length/N;
+      const labels=cnt.map((_,i)=>(minV+w*(i+0.5)).toFixed(2));
+
+      // Payoff perfil
+      const Sg=Array.from({length:201},(_,i)=>i*(K_high*2/200));
+      const pay=Sg.map(S=>Math.max(K_low-S,0)-Math.max(K_high-S,0));
+
+      [chartPrice,chartPutLow,chartPutHigh,chartSpread,chartHist,chartPayoff].forEach(c=>c&&c.destroy());
+      const baseLine={type:'line',options:{parsing:false,scales:{x:{type:'linear'}},plugins:{legend:{display:false}}}};
+      chartPrice=new Chart(document.getElementById('chartPrice'),{...baseLine,data:{datasets:dsPrice}});
+      chartPutLow=new Chart(document.getElementById('chartPutLow'),{...baseLine,data:{datasets:dsLow}});
+      chartPutHigh=new Chart(document.getElementById('chartPutHigh'),{...baseLine,data:{datasets:dsHigh}});
+      chartSpread=new Chart(document.getElementById('chartSpread'),{...baseLine,data:{datasets:dsSpr}});
+
+      chartHist=new Chart(document.getElementById('chartHist'),{
+        type:'bar',
+        data:{labels:labels,datasets:[{label: 
+          `Media: ${mean.toFixed(2)}\nMediana: ${median.toFixed(2)}\nModa: ${mode.toFixed(2)}\n`+
+          `σ: ${std.toFixed(2)}\nPérdida: ${(pLoss*100).toFixed(2)}%\n`+
+          `P≤-1.5: ${(p15*100).toFixed(2)}%\nP≤-3.0: ${(p30*100).toFixed(2)}%`,
+          data:cnt,borderWidth:1
+        }]},
+        options:{scales:{x:{title:{display:true,text:'Valor Spread'}},y:{title:{display:true,text:'Frecuencia'}}},plugins:{legend:{labels:{boxWidth:0,font:{size:10}}}}
+      }});
+
+      chartPayoff=new Chart(document.getElementById('chartPayoff'),{
+        type:'line',data:{labels:Sg,datasets:[{label:'Payoff en T',data:pay,borderWidth:2,fill:false,pointRadius:0}]},
+        options:{scales:{x:{title:{display:true,text:'Sₜ venc'}},y:{title:{display:true,text:'Payoff'}}},plugins:{legend:{display:true}}}
+      });
+    }
+  </script>
+</body>
+</html>
